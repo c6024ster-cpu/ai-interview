@@ -5,6 +5,7 @@ const NAV = [
   { href: "/#features", label: "功能" },
   { href: "/#how", label: "使用流程" },
   { href: "/#faq", label: "常見問題" },
+  { href: "/settings", label: "設定" },
 ];
 
 export default function SiteHeader() {

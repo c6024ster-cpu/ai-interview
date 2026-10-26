@@ -1,7 +1,10 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
+import { loadApiKey, useApiKey } from "@/lib/apiKey";
 import {
+  API_KEY_HEADER,
   DEFAULT_QUESTIONS,
   MAX_QUESTIONS,
   MIN_QUESTIONS,
@@ -28,6 +31,11 @@ export default function Practice() {
   const [evaluation, setEvaluation] = useState<Evaluation | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  // 金鑰相關錯誤時，錯誤訊息旁顯示前往設定頁的連結
+  const [keyError, setKeyError] = useState(false);
+  // null = 還沒讀取 localStorage（避免伺服器渲染時閃出「尚未設定」）
+  const storedKey = useApiKey();
+  const hasKey = storedKey === null ? null : Boolean(storedKey);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -37,14 +45,18 @@ export default function Practice() {
   async function callInterview(history: ChatMessage[]) {
     setLoading(true);
     setError("");
+    setKeyError(false);
     try {
       const res = await fetch("/interview", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", [API_KEY_HEADER]: loadApiKey() },
         body: JSON.stringify({ jobTitle, totalQuestions, messages: history }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "發生錯誤");
+      if (!res.ok) {
+        setKeyError(res.status === 401);
+        throw new Error(data.error ?? "發生錯誤");
+      }
 
       const result = data as InterviewResponse;
       if (result.done) {
@@ -92,6 +104,7 @@ export default function Practice() {
     setAnswer("");
     setEvaluation(null);
     setError("");
+    setKeyError(false);
   }
 
   const answered = messages.filter((m) => m.role === "user").length;
@@ -102,7 +115,11 @@ export default function Practice() {
         {error && (
           <div className="flex items-center justify-between gap-3 rounded-xl border border-accent/30 bg-accent-soft px-4 py-3 text-sm text-accent-dark">
             <span>{error}</span>
-            {stage === "interview" && messages.length === 0 && !loading && (
+            {keyError ? (
+              <Link href="/settings" className="shrink-0 font-medium underline">
+                前往設定
+              </Link>
+            ) : stage === "interview" && messages.length === 0 && !loading && (
               <button onClick={() => callInterview([])} className="font-medium underline">
                 重試
               </button>
@@ -172,9 +189,18 @@ export default function Practice() {
                 </div>
               </fieldset>
 
+              {hasKey === false && (
+                <div className="flex items-center justify-between gap-3 rounded-xl border border-accent/30 bg-accent-soft px-4 py-3 text-sm text-accent-dark">
+                  <span>開始前，請先設定你自己的 OpenAI API 金鑰。</span>
+                  <Link href="/settings" className="shrink-0 font-medium underline">
+                    前往設定
+                  </Link>
+                </div>
+              )}
+
               <button
                 type="submit"
-                disabled={!jobTitle.trim()}
+                disabled={!jobTitle.trim() || !hasKey}
                 className="group inline-flex items-center justify-center gap-2 rounded-full bg-ink px-6 py-4 font-medium text-paper transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-ink"
               >
                 開始面試

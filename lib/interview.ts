@@ -24,3 +24,6 @@ export type InterviewRequest = {
 export type InterviewResponse =
   | { done: false; reply: string; questionNumber: number }
   | { done: true; evaluation: Evaluation };
+
+// BYOK：前端把使用者自己的 OpenAI API 金鑰放在這個 header 送給 /interview
+export const API_KEY_HEADER = "x-openai-api-key";

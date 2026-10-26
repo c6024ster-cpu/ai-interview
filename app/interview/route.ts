@@ -6,6 +6,7 @@
 import OpenAI from "openai";
 // 前後端共用的常數與型別，放在 lib/interview.ts，確保兩邊格式一致
 import {
+  API_KEY_HEADER, // 前端放使用者 API 金鑰的 header 名稱
   MAX_QUESTIONS, // 最多可選幾題（10）
   MIN_QUESTIONS, // 最少可選幾題（1）
   type ChatMessage, // 單則對話：{ role: "assistant" | "user", content: string }
@@ -14,14 +15,15 @@ import {
   type InterviewResponse, // 回傳給前端的格式（出題 或 評分）
 } from "@/lib/interview";
 
-// 建立 OpenAI 客戶端，金鑰從 .env.local 的 OPENAI_API_KEY 讀取（只在伺服器端，不會外流到瀏覽器）
-const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+// BYOK（自備金鑰）模式：不使用伺服器的環境變數，而是每次請求從 header 讀取使用者自己的金鑰，
+// 用完即丟，伺服器不會儲存或記錄它
 // 使用的模型；可以在 .env.local 設定 OPENAI_MODEL 覆蓋，沒設定就用 gpt-4o-mini
 const MODEL = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
 
 // 輸入長度上限，避免有人送超長內容造成浪費 token 或濫用
 const MAX_JOB_TITLE_LENGTH = 100;
 const MAX_ANSWER_LENGTH = 2000;
+const MAX_API_KEY_LENGTH = 300;
 
 // 產生「面試官」角色的系統提示詞（system prompt），每出一題都會呼叫一次
 // questionNumber：現在要出第幾題；totalQuestions：總共幾題
@@ -106,10 +108,13 @@ function parseBody(body: unknown): InterviewRequest | null {
 
 // 處理 POST /interview 請求（App Router 中，route.ts 匯出名為 POST 的函式就代表處理 POST）
 export async function POST(request: Request) {
-  // 沒設定 API 金鑰就直接回錯誤，不用浪費時間呼叫 OpenAI
-  if (!process.env.OPENAI_API_KEY) {
-    return Response.json({ error: "伺服器未設定 OPENAI_API_KEY" }, { status: 500 });
+  // 從 header 取出使用者的 API 金鑰；沒帶或格式明顯不對就直接回 401，不用浪費時間呼叫 OpenAI
+  const apiKey = request.headers.get(API_KEY_HEADER)?.trim();
+  if (!apiKey || apiKey.length > MAX_API_KEY_LENGTH || /\s/.test(apiKey)) {
+    return Response.json({ error: "請先到設定頁輸入你的 OpenAI API 金鑰" }, { status: 401 });
   }
+  // 每個請求用該使用者的金鑰建立自己的客戶端
+  const client = new OpenAI({ apiKey });
 
   // 解析 JSON；如果 body 根本不是合法 JSON，.catch 會讓它變成 null，交給 parseBody 判定為錯誤
   const parsed = parseBody(await request.json().catch(() => null));
@@ -164,9 +169,19 @@ export async function POST(request: Request) {
     // 回傳 done: true 告訴前端「面試結束」，前端就會切換到結果頁
     return Response.json({ done: true, evaluation } satisfies InterviewResponse);
   } catch (error) {
-    // OpenAI 呼叫失敗（網路問題、額度用完、金鑰錯誤等）或 JSON 解析失敗都會進到這裡
-    // 詳細錯誤只印在伺服器終端機，回給前端的是通用訊息，避免洩漏內部資訊
-    console.error(error);
+    // 金鑰錯誤與額度問題是使用者自己能處理的，回傳明確的訊息
+    if (error instanceof OpenAI.AuthenticationError) {
+      return Response.json({ error: "API 金鑰無效，請到設定頁重新輸入" }, { status: 401 });
+    }
+    if (error instanceof OpenAI.RateLimitError) {
+      return Response.json(
+        { error: "OpenAI 額度不足或請求太頻繁，請確認帳號餘額後再試" },
+        { status: 429 },
+      );
+    }
+    // 其他失敗（網路問題、JSON 解析失敗等）：詳細錯誤只印在伺服器終端機，回給前端通用訊息
+    // 只印 message，避免把含金鑰資訊的完整請求物件寫進 log
+    console.error(error instanceof Error ? error.message : error);
     return Response.json({ error: "AI 服務暫時無法使用，請稍後再試" }, { status: 502 });
   }
 }
